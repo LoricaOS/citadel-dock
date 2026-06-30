@@ -1,31 +1,31 @@
 # citadel-dock
 
-The desktop dock for [AspisOS](https://github.com/AspisOS/AspisOS) — a
+The desktop dock for [LoricaOS](https://github.com/LoricaOS/LoricaOS) — a
 capability-based, no-ambient-authority x86-64 operating system built on the
-from-scratch [Aegis](https://github.com/AspisOS/Aegis) kernel.
+from-scratch [Aegis](https://github.com/LoricaOS/Aegis) kernel.
 
 citadel-dock is the persistent launcher bar pinned to the bottom-centre of the
 desktop. It is a standalone binary (installed at `/bin/citadel-dock`) and a
-client of the [lumen](https://github.com/AspisOS/lumen) compositor: it asks
+client of the [lumen](https://github.com/LoricaOS/lumen) compositor: it asks
 lumen for a panel, draws a row of application icons into the shared buffer lumen
 hands back, and — when an icon is clicked — asks lumen to launch the
-corresponding app. It is distributed as a [herald](https://github.com/AspisOS/AspisOS)
+corresponding app. It is distributed as a [herald](https://github.com/LoricaOS/LoricaOS)
 system package and is started automatically on a graphical boot.
 
 The dock was originally an overlay rendered inside libcitadel and linked into
 the compositor itself; it has been peeled out into this standalone client that
 speaks the same external window protocol every other GUI app uses.
 
-## Where it fits in AspisOS
+## Where it fits in LoricaOS
 
-AspisOS is decomposed into independent repositories:
+LoricaOS is decomposed into independent repositories:
 
 | Repo | Role |
 |------|------|
-| `AspisOS/Aegis` | The kernel: framebuffer, `AF_UNIX` sockets, the capability model, the syscalls everything graphical runs on. |
-| `AspisOS/lumen` | The compositor/display server. Owns the screen; every GUI process connects to `/run/lumen.sock` for a window. |
-| `AspisOS/glyph` | The GUI toolkit. Provides drawing primitives, fonts, procedural icons, and the client side of lumen's window protocol (`lumen_client.h`, `lumen_proto.h`). |
-| `AspisOS/citadel-dock` | **This repo.** A lumen client that draws the dock and brokers app launches through the compositor. |
+| `LoricaOS/Aegis` | The kernel: framebuffer, `AF_UNIX` sockets, the capability model, the syscalls everything graphical runs on. |
+| `LoricaOS/lumen` | The compositor/display server. Owns the screen; every GUI process connects to `/run/lumen.sock` for a window. |
+| `LoricaOS/glyph` | The GUI toolkit. Provides drawing primitives, fonts, procedural icons, and the client side of lumen's window protocol (`lumen_client.h`, `lumen_proto.h`). |
+| `LoricaOS/citadel-dock` | **This repo.** A lumen client that draws the dock and brokers app launches through the compositor. |
 
 The dock holds no display authority of its own — it does not touch the
 framebuffer or input devices. It talks to lumen, which composites its panel and
@@ -37,7 +37,7 @@ forwards it input events. Everything graphical declares `depends=lumen`.
 
 - **Connect.** On start it loops on `lumen_connect()` indefinitely, sleeping
   200 ms between attempts. lumen is started early under a graphical boot but does
-  not bind `/run/lumen.sock` until [bastion](https://github.com/AspisOS/bastion)
+  not bind `/run/lumen.sock` until [bastion](https://github.com/LoricaOS/bastion)
   authenticates a user — possibly minutes later — so the dock treats
   `ECONNREFUSED` as "not ready yet" and waits rather than exiting (which would
   burn vigil restart credits). Any other connect error is fatal.
@@ -86,7 +86,7 @@ first-party and signature-trusted, installed verbatim by herald.
 ## Building
 
 citadel-dock builds with a musl cross-compiler against a pinned
-[glyph](https://github.com/AspisOS/glyph) toolkit artifact, then packs a signed
+[glyph](https://github.com/LoricaOS/glyph) toolkit artifact, then packs a signed
 herald package.
 
 ```sh
@@ -139,5 +139,5 @@ GLYPH_VERSION     the pinned glyph toolkit version it builds against
 ## Dependencies
 
 `depends=lumen` — the dock is a lumen client and launches apps through the
-compositor, so installing it pulls [lumen](https://github.com/AspisOS/lumen)
+compositor, so installing it pulls [lumen](https://github.com/LoricaOS/lumen)
 (which in turn ships the desktop fonts every component inherits).
