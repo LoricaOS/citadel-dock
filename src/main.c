@@ -70,8 +70,8 @@ static int s_hover = -1;        /* launcher hover, -1 = none */
 /* Task area: one entry per open window, to the right of the launcher icons.
  * Populated from LUMEN_EV_WINDOW_LIST; clicking an entry activates that window. */
 #define TASK_SEP_W    18   /* gap + divider between launchers and the task area */
-#define TASK_ENTRY_W  120
-#define TASK_ENTRY_GAP 8
+#define TASK_ENTRY_W  DOCK_ICON_SIZE   /* one app icon per open window */
+#define TASK_ENTRY_GAP DOCK_ICON_GAP
 #define TASK_MAX      16
 static lumen_window_info_t s_wins[TASK_MAX];
 static int s_nwins = 0;
@@ -102,6 +102,35 @@ log_console(const char *msg)
     write(2, msg, strlen(msg));
     int cfd = open("/dev/console", O_WRONLY);
     if (cfd >= 0) { write(cfd, msg, strlen(msg)); close(cfd); }
+}
+
+/* Map a window title to a known glyph icon id. Unknown titles pass through:
+ * the title becomes the id, so glyph_icon_draw draws its letter-tile fallback
+ * (games keep their distinct letters that way). */
+static const char *
+title_icon_id(const char *title)
+{
+    static const struct { const char *title, *id; } map[] = {
+        { "Applications",    "applications" },
+        { "Settings",        "settings" },
+        { "Files",           "filemanager" },
+        { "Terminal",        "terminal" },
+        { "Calculator",      "calculator" },
+        { "Text Editor",     "editor" },
+        { "System Monitor",  "sysmon" },
+        { "Network Manager", "netman" },
+        { "Calendar",        "calendar" },
+        { "Images",          "imageviewer" },
+        { "Tunes",           "tunes" },
+        { "Run",             "run" },
+        { "Snake",           "snake" },
+        { "Minesweeper",     "minesweeper" },
+        /* "2048" title == its icon id, so it passes through. */
+    };
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+        if (strcmp(title, map[i].title) == 0)
+            return map[i].id;
+    return title;
 }
 
 /* Bridge surface_t expected by glyph draw_* over the lumen window backbuf. */
@@ -176,30 +205,27 @@ render_dock(lumen_window_t *win)
         glyph_icon_draw(&s, s_item_invoke[i], NULL, ix, iy, DOCK_ICON_SIZE);
     }
 
-    /* Task area: a divider, then one pill per open window (title text; focused
-     * = accent, minimized = dimmed). */
+    /* Task area: a divider, then one app icon per open window with a
+     * macOS-style running dot beneath it (accent when focused). Minimized
+     * windows are still running, so the icon is dimmed but keeps its dot. */
     if (s_nwins > 0) {
         int divx = launchers_right() + TASK_SEP_W / 2;
         draw_blend_rect(&s, divx, DOCK_PADDING_Y, 1, DOCK_ICON_SIZE, 0x00FFFFFF, 30);
         for (int i = 0; i < s_nwins; i++) {
             const lumen_window_info_t *w = &s_wins[i];
             int ex = task_entry_x(i), ey = DOCK_PADDING_Y;
-            uint32_t bg = w->focused ? THEME_ACCENT
-                        : (i == s_win_hover ? THEME_HOVER
-                        : (w->minimized ? THEME_SURFACE : THEME_SURFACE_2));
-            draw_rounded_rect(&s, ex, ey, TASK_ENTRY_W, DOCK_ICON_SIZE, R_SM, bg);
-            uint32_t fg = w->focused ? THEME_TEXT_ON_ACCENT
-                        : (w->minimized ? THEME_TEXT_DIM : THEME_TEXT);
-            /* Truncate the title to fit the pill. */
-            char t[64];
-            snprintf(t, sizeof(t), "%.*s", (int)sizeof(t) - 1, w->title);
-            int maxw = TASK_ENTRY_W - 16;
-            if (g_font_ui) {
-                while (t[0] && font_text_width(g_font_ui, 13, t) > maxw)
-                    t[strlen(t) - 1] = '\0';
-                font_draw_text(&s, g_font_ui, 13, ex + 8,
-                               ey + (DOCK_ICON_SIZE - 15) / 2, t, fg);
-            }
+            if (i == s_win_hover)
+                draw_blend_rounded_rect(&s, ex - 4, ey - 4,
+                                        DOCK_ICON_SIZE + 8, DOCK_ICON_SIZE + 8,
+                                        R_SM + 2, DOCK_HOVER_BG, DOCK_HOVER_ALPHA);
+            glyph_icon_draw(&s, title_icon_id(w->title), w->title,
+                            ex, ey, DOCK_ICON_SIZE);
+            if (w->minimized)
+                draw_blend_rounded_rect(&s, ex, ey, DOCK_ICON_SIZE,
+                                        DOCK_ICON_SIZE, R_SM, 0x00000000, 120);
+            draw_circle_filled(&s, ex + DOCK_ICON_SIZE / 2,
+                               ey + DOCK_ICON_SIZE + 4, 3,
+                               w->focused ? THEME_ACCENT : THEME_TEXT_DIM);
         }
     }
 }
