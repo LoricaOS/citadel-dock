@@ -65,7 +65,18 @@ static const char *s_item_invoke[DOCK_MAX_ITEMS] = {
 
 static int s_nitems = 6;        /* + installer when on live media */
 static int s_dock_w;
-static int s_hover = -1;
+static int s_hover = -1;        /* launcher hover, -1 = none */
+
+/* Task area: one entry per open window, to the right of the launcher icons.
+ * Populated from LUMEN_EV_WINDOW_LIST; clicking an entry activates that window. */
+#define TASK_SEP_W    18   /* gap + divider between launchers and the task area */
+#define TASK_ENTRY_W  120
+#define TASK_ENTRY_GAP 8
+#define TASK_MAX      16
+static lumen_window_info_t s_wins[TASK_MAX];
+static int s_nwins = 0;
+static int s_win_hover = -1;    /* hovered task entry index, -1 = none */
+static lumen_window_t *s_panel = NULL;   /* our panel window (for self-resize) */
 
 /* The installer icon only appears on live boots: gen-limine-conf.sh marks
  * every live-media cmdline with aegis_live=1, and vigil removes the
@@ -113,6 +124,32 @@ item_rect(int i, int *ix, int *iy)
     *iy = DOCK_PADDING_Y;
 }
 
+/* Right edge of the launcher icon row (local x). */
+static int
+launchers_right(void)
+{
+    return DOCK_PADDING_X + s_nitems * DOCK_ICON_SIZE +
+           (s_nitems - 1) * DOCK_ICON_GAP;
+}
+
+/* Local x of task entry i (the window at s_wins[i]). */
+static int
+task_entry_x(int i)
+{
+    return launchers_right() + TASK_SEP_W + i * (TASK_ENTRY_W + TASK_ENTRY_GAP);
+}
+
+/* Total dock width for the current launcher + task-entry counts. */
+static int
+dock_width(void)
+{
+    int w = launchers_right();
+    if (s_nwins > 0)
+        w += TASK_SEP_W + s_nwins * TASK_ENTRY_W +
+             (s_nwins - 1) * TASK_ENTRY_GAP;
+    return w + DOCK_PADDING_X;
+}
+
 static void
 render_dock(lumen_window_t *win)
 {
@@ -138,6 +175,33 @@ render_dock(lumen_window_t *win)
          * glyph_icon_draw knows — e.g. "installer"). */
         glyph_icon_draw(&s, s_item_invoke[i], NULL, ix, iy, DOCK_ICON_SIZE);
     }
+
+    /* Task area: a divider, then one pill per open window (title text; focused
+     * = accent, minimized = dimmed). */
+    if (s_nwins > 0) {
+        int divx = launchers_right() + TASK_SEP_W / 2;
+        draw_blend_rect(&s, divx, DOCK_PADDING_Y, 1, DOCK_ICON_SIZE, 0x00FFFFFF, 30);
+        for (int i = 0; i < s_nwins; i++) {
+            const lumen_window_info_t *w = &s_wins[i];
+            int ex = task_entry_x(i), ey = DOCK_PADDING_Y;
+            uint32_t bg = w->focused ? THEME_ACCENT
+                        : (i == s_win_hover ? THEME_HOVER
+                        : (w->minimized ? THEME_SURFACE : THEME_SURFACE_2));
+            draw_rounded_rect(&s, ex, ey, TASK_ENTRY_W, DOCK_ICON_SIZE, R_SM, bg);
+            uint32_t fg = w->focused ? THEME_TEXT_ON_ACCENT
+                        : (w->minimized ? THEME_TEXT_DIM : THEME_TEXT);
+            /* Truncate the title to fit the pill. */
+            char t[64];
+            snprintf(t, sizeof(t), "%.*s", (int)sizeof(t) - 1, w->title);
+            int maxw = TASK_ENTRY_W - 16;
+            if (g_font_ui) {
+                while (t[0] && font_text_width(g_font_ui, 13, t) > maxw)
+                    t[strlen(t) - 1] = '\0';
+                font_draw_text(&s, g_font_ui, 13, ex + 8,
+                               ey + (DOCK_ICON_SIZE - 15) / 2, t, fg);
+            }
+        }
+    }
 }
 
 static int
@@ -153,6 +217,42 @@ hit_test(int lx, int ly)
             return i;
     }
     return -1;
+}
+
+/* Task-entry index at (lx,ly), or -1. */
+static int
+hit_window(int lx, int ly)
+{
+    if (ly < DOCK_PADDING_Y || ly >= DOCK_PADDING_Y + DOCK_ICON_SIZE)
+        return -1;
+    for (int i = 0; i < s_nwins; i++) {
+        int ex = task_entry_x(i);
+        if (lx >= ex && lx < ex + TASK_ENTRY_W)
+            return i;
+    }
+    return -1;
+}
+
+/* Adopt a new window list from the compositor: copy it, resize the panel to fit
+ * the task area, and repaint. */
+static void
+apply_window_list(const lumen_window_info_t *items, int count)
+{
+    if (count > TASK_MAX) count = TASK_MAX;
+    s_nwins = count;
+    for (int i = 0; i < count; i++)
+        s_wins[i] = items[i];
+    s_win_hover = -1;
+
+    int neww = dock_width();
+    if (s_panel && neww != s_panel->w &&
+        lumen_window_resize_self(s_panel, neww, DOCK_HEIGHT) == 0)
+        s_dock_w = neww;
+
+    if (s_panel) {
+        render_dock(s_panel);
+        lumen_window_present(s_panel);
+    }
 }
 
 /* Emit the same [DOCK] debug lines the old in-process dock did so that
@@ -214,6 +314,7 @@ int main(void)
         close(fd);
         return 1;
     }
+    s_panel = win;   /* for apply_window_list's self-resize */
 
     /* dock_click_test parses [DOCK] lines for icon SCREEN-centers.
      * lumen_window_created_t reply now carries the panel's screen
@@ -236,9 +337,11 @@ int main(void)
         switch (ev.type) {
         case LUMEN_EV_MOUSE: {
             int item = hit_test(ev.mouse.x, ev.mouse.y);
+            int wi   = (item < 0) ? hit_window(ev.mouse.x, ev.mouse.y) : -1;
             if (ev.mouse.evtype == LUMEN_MOUSE_MOVE) {
-                if (item != s_hover) {
+                if (item != s_hover || wi != s_win_hover) {
                     s_hover = item;
+                    s_win_hover = wi;
                     render_dock(win);
                     lumen_window_present(win);
                 }
@@ -246,9 +349,15 @@ int main(void)
                        (ev.mouse.buttons & 1)) {
                 if (item >= 0 && item < s_nitems)
                     lumen_invoke(fd, s_item_invoke[item]);
+                else if (wi >= 0 && wi < s_nwins)
+                    lumen_activate_window(fd, s_wins[wi].gid);
             }
             break;
         }
+        case LUMEN_EV_WINDOW_LIST:
+            apply_window_list((const lumen_window_info_t *)ev.windows.items,
+                              ev.windows.count);
+            break;
         case LUMEN_EV_CLOSE_REQUEST:
             /* Ignore — dock is unkillable from the UI. */
             break;
