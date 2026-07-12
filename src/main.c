@@ -179,6 +179,65 @@ dock_width(void)
     return w + DOCK_PADDING_X;
 }
 
+/* Vertical color lerp a→b over [0,n). */
+static uint32_t
+dock_lerp(uint32_t a, uint32_t b, int t, int n)
+{
+    if (n <= 1) return a;
+    int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+    int r = ar + (br - ar) * t / (n - 1);
+    int g = ag + (bg - ag) * t / (n - 1);
+    int bl = ab + (bb - ab) * t / (n - 1);
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+}
+
+static void
+dput(surface_t *s, int x, int y, uint32_t c)
+{
+    if (x >= 0 && x < s->w && y >= 0 && y < s->h)
+        s->buf[y * s->pitch + x] = c;
+}
+
+/* A 1px directional rim that follows the compositor's rounded corners EXACTLY
+ * (same corner centers + dist<=r arc), so it can never be clipped into a dotted
+ * edge. Color is a vertical gradient: a light-grey highlight at the top flowing
+ * to a near-black shadow at the bottom, so the sides sit at a medium tone and
+ * the whole rim flows smoothly around the perimeter (top bright > sides > bottom
+ * darkest). */
+static void
+dock_rim(surface_t *s, int w, int h, int r)
+{
+    const uint32_t top = 0x00828C9E, bot = 0x00070A10;
+    for (int x = r; x < w - r; x++) {
+        dput(s, x, 0,     dock_lerp(top, bot, 0,     h));
+        dput(s, x, h - 1, dock_lerp(top, bot, h - 1, h));
+    }
+    for (int y = r; y < h - r; y++) {
+        uint32_t c = dock_lerp(top, bot, y, h);
+        dput(s, 0, y, c);
+        dput(s, w - 1, y, c);
+    }
+    /* Corner arcs: draw the OUTER boundary of the kept region (a pixel that is
+     * inside the arc but has a neighbour one step further out that is cut). This
+     * is gap-free and pixel-aligned with round_window_corner. */
+    const int cx[4] = { r, w - r - 1, r, w - r - 1 };
+    const int cy[4] = { r, r, h - r - 1, h - r - 1 };
+    const int ox[4] = { 0, w - r, 0, w - r };
+    const int oy[4] = { 0, 0, h - r, h - r };
+    for (int cc = 0; cc < 4; cc++)
+        for (int j = 0; j < r; j++)
+            for (int i = 0; i < r; i++) {
+                int x = ox[cc] + i, y = oy[cc] + j;
+                int dx = x - cx[cc], dy = y - cy[cc];
+                int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+                if (dx * dx + dy * dy <= r * r &&
+                    ((adx + 1) * (adx + 1) + ady * ady > r * r ||
+                     adx * adx + (ady + 1) * (ady + 1) > r * r))
+                    dput(s, x, y, dock_lerp(top, bot, y, h));
+            }
+}
+
 static void
 render_dock(lumen_window_t *win)
 {
@@ -186,18 +245,13 @@ render_dock(lumen_window_t *win)
     int w = s.w, h = s.h;
 
     /* Frosted glass dock: fill with the compositor's frost key (C_TERM_BG) so
-     * Lumen blurs + tints the desktop behind it — the compositor now also rounds
-     * the panel corners (all four). The bright top edge, dark bottom edge, and
-     * subtle rim are opaque (non-key), so they draw over the frost to give the
-     * glassy slab look; they're inset past R_MD to follow the rounded corners. */
+     * Lumen blurs + tints the desktop behind it — the compositor also rounds the
+     * panel corners (all four). Over the frost: a directional rim that follows
+     * those exact corners (no dotted clipping), plus a faint inner top sheen for
+     * glass. */
     draw_fill_rect(&s, 0, 0, w, h, C_TERM_BG);
-    /* Bright glassy top edge. */
-    draw_blend_rect(&s, R_MD, 0, w - 2 * R_MD, 1, 0x00FFFFFF, 120);
-    draw_blend_rect(&s, R_MD, 1, w - 2 * R_MD, 1, 0x00FFFFFF, 40);
-    /* Dark bottom edge for depth. */
-    draw_blend_rect(&s, R_MD, h - 1, w - 2 * R_MD, 1, 0x00000000, 120);
-    /* Subtle full rounded rim (aligns with the compositor's R_MD corners). */
-    draw_rounded_outline(&s, 0, 0, w, h, R_MD, 1, 0x003A414F);
+    dock_rim(&s, w, h, R_MD);
+    draw_blend_rect(&s, R_MD, 1, w - 2 * R_MD, 1, 0x00FFFFFF, 28);
 
     for (int i = 0; i < s_nitems; i++) {
         int ix, iy;
