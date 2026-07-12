@@ -188,8 +188,12 @@ render_dock(lumen_window_t *win)
      * Lumen blurs + tints the desktop behind the bar (the panel is created
      * frosted). Icons drawn on top are opaque (non-key) and show through. */
     draw_fill_rect(&s, 0, 0, s.w, s.h, C_TERM_BG);
+    /* Rounded rim so the dock reads as a defined floating container on the dark
+     * wallpaper (matches the mockup). R_MD matches the compositor's window
+     * corner radius, so the rim aligns with the rounded panel corners. */
+    draw_rounded_outline(&s, 0, 0, s.w, s.h, R_MD, 1, 0x00454C5E);
     /* Subtle 1px top highlight for a glassy edge. */
-    draw_blend_rect(&s, 0, 0, s.w, 1, 0x00FFFFFF, 28);
+    draw_blend_rect(&s, 2, 1, s.w - 4, 1, 0x00FFFFFF, 32);
 
     for (int i = 0; i < s_nitems; i++) {
         int ix, iy;
