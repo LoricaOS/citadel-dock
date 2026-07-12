@@ -179,21 +179,39 @@ dock_width(void)
     return w + DOCK_PADDING_X;
 }
 
+/* Vertical color lerp a→b over [0,n). */
+static uint32_t
+dock_lerp(uint32_t a, uint32_t b, int t, int n)
+{
+    if (n <= 1) return a;
+    int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+    int r = ar + (br - ar) * t / (n - 1);
+    int g = ag + (bg - ag) * t / (n - 1);
+    int bl = ab + (bb - ab) * t / (n - 1);
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+}
+
 static void
 render_dock(lumen_window_t *win)
 {
     surface_t s = backbuf_surface(win);
+    int w = s.w, h = s.h;
 
-    /* Frosted glass dock: fill with the compositor's frost key (C_TERM_BG) so
-     * Lumen blurs + tints the desktop behind the bar (the panel is created
-     * frosted). Icons drawn on top are opaque (non-key) and show through. */
-    draw_fill_rect(&s, 0, 0, s.w, s.h, C_TERM_BG);
-    /* Rounded rim so the dock reads as a defined floating container on the dark
-     * wallpaper (matches the mockup). R_MD matches the compositor's window
-     * corner radius, so the rim aligns with the rounded panel corners. */
-    draw_rounded_outline(&s, 0, 0, s.w, s.h, R_MD, 1, 0x00454C5E);
-    /* Subtle 1px top highlight for a glassy edge. */
-    draw_blend_rect(&s, 2, 1, s.w - 4, 1, 0x00FFFFFF, 32);
+    /* Glassy dock: an opaque vertical gradient (dark grey at the top → near-black
+     * at the bottom), a bright white top edge, and a dark bottom edge — a real
+     * glass slab rather than a faint frosted rect. The compositor rounds the
+     * panel corners to R_MD, so the rim + edge highlights are inset past the
+     * corners to follow the rounding. */
+    for (int y = 0; y < h; y++)
+        draw_fill_rect(&s, 0, y, w, 1, dock_lerp(0x00343B47, 0x00060708, y, h));
+    /* Bright glassy top edge. */
+    draw_blend_rect(&s, R_MD, 0, w - 2 * R_MD, 1, 0x00FFFFFF, 130);
+    draw_blend_rect(&s, R_MD, 1, w - 2 * R_MD, 1, 0x00FFFFFF, 45);
+    /* Dark bottom edge for depth. */
+    draw_blend_rect(&s, R_MD, h - 1, w - 2 * R_MD, 1, 0x00000000, 150);
+    /* Subtle full rounded rim (aligns with the compositor's R_MD corners). */
+    draw_rounded_outline(&s, 0, 0, w, h, R_MD, 1, 0x003A414F);
 
     for (int i = 0; i < s_nitems; i++) {
         int ix, iy;
