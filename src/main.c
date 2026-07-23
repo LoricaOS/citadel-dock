@@ -40,6 +40,26 @@
 #define DOCK_ITEM_INSTALLER 6   /* live-boot only — appended at runtime */
 #define DOCK_MAX_ITEMS      7
 
+/* boot_mark — timestamped boot-profiling milestone on CLOCK_MONOTONIC (same
+ * base as vigil's [PROF] marks). Boot-profiling only. */
+static void
+boot_mark(const char *phase)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return;
+    unsigned long ms = (unsigned long)ts.tv_sec * 1000UL +
+                       (unsigned long)(ts.tv_nsec / 1000000L);
+    char pbuf[96];
+    int pn = snprintf(pbuf, sizeof(pbuf), "[PROF] %lu ms %s\n", ms, phase);
+    if (pn <= 0) return;
+    /* /dev/console = the kernel console (serial on the Pi). Use it, not fd 2:
+     * once bastion starts the graphical session, lumen and its children get
+     * stderr redirected off serial, so fd-2 marks never reach the boot log. */
+    int cfd = open("/dev/console", O_WRONLY);
+    if (cfd >= 0) { write(cfd, pbuf, (size_t)pn); close(cfd); }
+    else write(2, pbuf, (size_t)pn);
+}
+
 static const char *s_item_keys[DOCK_MAX_ITEMS] = {
     [DOCK_ITEM_APPS]      = "applications",
     [DOCK_ITEM_SETTINGS]  = "settings",
@@ -340,6 +360,8 @@ apply_window_list(const lumen_window_info_t *items, int count)
     if (s_panel) {
         render_dock(s_panel);
         lumen_window_present(s_panel);
+        static int s_first = 0;
+        if (!s_first) { s_first = 1; boot_mark("dock-first-frame"); }
     }
 }
 
@@ -372,6 +394,11 @@ int main(void)
      * minutes later. Exiting on timeout would burn vigil restart credits
      * for no reason. Loop indefinitely instead. */
     int fd = -1;
+    long backoff_us = 2000;   /* poll fast at first — lumen's socket comes up
+                               * ~30ms after autologin, so a flat 200ms sleep
+                               * wasted ~170ms of time-to-desktop — then back
+                               * off to a 128ms cap so a greeter login that
+                               * takes minutes doesn't busy-spin the CPU. */
     for (;;) {
         fd = lumen_connect();
         if (fd >= 0) break;
@@ -382,8 +409,9 @@ int main(void)
             if (n > 0) log_console(buf);
             return 1;
         }
-        struct timespec ts = { 0, 200 * 1000 * 1000 };  /* 200ms */
+        struct timespec ts = { 0, backoff_us * 1000 };
         nanosleep(&ts, NULL);
+        if (backoff_us < 128000) backoff_us *= 2;
     }
 
     /* Initialize TTF font renderer so terminal icon ">_" looks right. */
